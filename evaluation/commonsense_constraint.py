@@ -246,7 +246,7 @@ def is_valid_information_in_current_city(question, tested_data):
             city2 = extract_before_parenthesis(city2)
             final_city_list = [city1, city2]
         else:
-            final_city_list = extract_before_parenthesis(current_city)
+            final_city_list = [extract_before_parenthesis(current_city)]
 
         if 'transportation' in unit and unit['transportation'] and unit['transportation'] != '-':
             for city in final_city_list:
