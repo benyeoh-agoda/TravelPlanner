@@ -13,6 +13,8 @@ if __name__ == '__main__':
     parser.add_argument("--strategy", type=str, default="direct")
     parser.add_argument("--output_dir", type=str, default="./")
     parser.add_argument("--submission_file_dir", type=str, default="./")
+    parser.add_argument("--start", type=int, default=1)
+    parser.add_argument("--end", type=int, default=None)
 
     args = parser.parse_args()
 
@@ -28,13 +30,18 @@ if __name__ == '__main__':
     elif args.set_type == 'test':
         query_data_list  = load_dataset('osunlp/TravelPlanner','test')['test']
 
-    idx_number_list = [i for i in range(1,len(query_data_list)+1)]
+    _end = args.end if args.end is not None else len(query_data_list)
+    idx_number_list = [i for i in range(args.start, _end + 1)]
 
     submission_list = []
 
-    for idx in tqdm(idx_number_list):
-        generated_plan = json.load(open(f'{args.output_dir}/{args.set_type}/generated_plan_{idx}.json'))
-        plan = generated_plan[-1][f'{args.model_name}{suffix}_{args.mode}_parsed_results']
+    for idx in tqdm(range(1, len(query_data_list) + 1)):
+        plan_path = f'{args.output_dir}/{args.set_type}/generated_plan_{idx}.json'
+        try:
+            generated_plan = json.load(open(plan_path))
+            plan = generated_plan[-1].get(f'{args.model_name}{suffix}_{args.mode}_parsed_results', None)
+        except FileNotFoundError:
+            plan = None
         submission_list.append({"idx":idx,"query":query_data_list[idx-1]['query'],"plan":plan})
     
     with open(f'{args.submission_file_dir}/{args.set_type}_{args.model_name}{suffix}_{args.mode}_submission.jsonl','w',encoding='utf-8') as w:

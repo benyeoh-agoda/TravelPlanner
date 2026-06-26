@@ -3,14 +3,15 @@ import os
 from dotenv import load_dotenv
 load_dotenv()
 sys.path.append(os.path.abspath(os.path.join(os.getcwd(), "..")))
-from langchain.prompts import PromptTemplate
+from langchain_core.prompts import PromptTemplate
 from agents.prompts import planner_agent_prompt, cot_planner_agent_prompt, react_planner_agent_prompt,reflect_prompt,react_reflect_planner_agent_prompt, REFLECTION_HEADER
-from langchain_community.chat_models import ChatOpenAI, ChatOllama
-from langchain.llms.base import BaseLLM
-from langchain.schema import (
+from langchain_openai import ChatOpenAI
+from langchain_ollama import ChatOllama
+from langchain_core.language_models.llms import BaseLLM
+from langchain_core.messages import (
     AIMessage,
     HumanMessage,
-    SystemMessage
+    SystemMessage,
 )
 from env import ReactEnv,ReactReflectEnv
 import tiktoken
@@ -119,7 +120,7 @@ class Planner:
             if len(self.enc.encode(self._build_agent_prompt(text, query))) > 12000:
                 return 'Max Token Length Exceeded.'
             else:
-                return self.llm([HumanMessage(content=self._build_agent_prompt(text, query))]).content
+                return self.llm.invoke([HumanMessage(content=self._build_agent_prompt(text, query))]).content
 
     def _build_agent_prompt(self, text, query) -> str:
         return self.agent_prompt.format(
@@ -219,7 +220,7 @@ class ReactPlanner:
     def prompt_agent(self) -> str:
         while True:
             try:
-                return format_step(self.react_llm([HumanMessage(content=self._build_agent_prompt())]).content)
+                return format_step(self.react_llm.invoke([HumanMessage(content=self._build_agent_prompt())]).content)
             except:
                 catch_openai_api_error()
                 print(self._build_agent_prompt())
@@ -364,7 +365,7 @@ class ReactReflectPlanner:
                 if self.model_name in ['gemini']:
                     return format_step(self.react_llm.invoke(self._build_agent_prompt()).content)
                 else:
-                    return format_step(self.react_llm([HumanMessage(content=self._build_agent_prompt())]).content)
+                    return format_step(self.react_llm.invoke([HumanMessage(content=self._build_agent_prompt())]).content)
             except:
                 catch_openai_api_error()
                 print(self._build_agent_prompt())
@@ -377,7 +378,7 @@ class ReactReflectPlanner:
                 if self.model_name in ['gemini']:
                     return format_step(self.reflect_llm.invoke(self._build_reflection_prompt()).content)
                 else:
-                    return format_step(self.reflect_llm([HumanMessage(content=self._build_reflection_prompt())]).content)
+                    return format_step(self.reflect_llm.invoke([HumanMessage(content=self._build_reflection_prompt())]).content)
             except:
                 catch_openai_api_error()
                 print(self._build_reflection_prompt())

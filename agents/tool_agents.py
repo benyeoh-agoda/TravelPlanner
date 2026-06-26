@@ -9,14 +9,15 @@ import importlib
 from typing import List, Dict, Any
 import tiktoken
 from pandas import DataFrame
-from langchain_community.chat_models import ChatOpenAI, ChatOllama
+from langchain_openai import ChatOpenAI
+from langchain_ollama import ChatOllama
 from langchain_community.callbacks import get_openai_callback
-from langchain.llms.base import BaseLLM
-from langchain.prompts import PromptTemplate
-from langchain.schema import (
+from langchain_core.language_models.llms import BaseLLM
+from langchain_core.prompts import PromptTemplate
+from langchain_core.messages import (
     AIMessage,
     HumanMessage,
-    SystemMessage
+    SystemMessage,
 )
 from prompts import zeroshot_react_agent_prompt
 from utils.func import load_line_json_data, save_file
@@ -50,14 +51,14 @@ class DateError(Exception):
 
 def catch_openai_api_error():
     error = sys.exc_info()[0]
-    if error == openai.error.APIConnectionError:
+    if error == openai.APIConnectionError:
         print("APIConnectionError")
-    elif error == openai.error.RateLimitError:
+    elif error == openai.RateLimitError:
         print("RateLimitError")
         time.sleep(60)
-    elif error == openai.error.APIError:
+    elif error == openai.APIError:
         print("APIError")
-    elif error == openai.error.AuthenticationError:
+    elif error == openai.AuthenticationError:
         print("AuthenticationError")
     else:
         print("API error:", error)
@@ -73,8 +74,10 @@ class ReactAgent:
                  react_llm_name = 'gpt-3.5-turbo-1106',
                  planner_llm_name = 'gpt-3.5-turbo-1106',
                 #  logs_path = '../logs/',
-                 city_file_path = '../database/background/citySet.txt'
-                 ) -> None: 
+                 city_file_path = '../database/background/citySet.txt',
+                 base_url: str = None,
+                 no_think: bool = False,
+                 ) -> None:
 
         self.answer = ''
         self.max_steps = max_steps
@@ -107,8 +110,9 @@ class ReactAgent:
                      max_tokens=256,
                      model_name=react_llm_name,
                      openai_api_key=OPENAI_API_KEY,
+                     openai_api_base=base_url,
                      model_kwargs={"stop": stop_list})
-            
+
         elif 'gpt-4' in react_llm_name:
             stop_list = ['\n']
             self.max_token_length = 30000
@@ -116,6 +120,7 @@ class ReactAgent:
                      max_tokens=256,
                      model_name=react_llm_name,
                      openai_api_key=OPENAI_API_KEY,
+                     openai_api_base=base_url,
                      model_kwargs={"stop": stop_list})
             
         elif react_llm_name in ['mistral-7B-32K']:
@@ -155,6 +160,19 @@ class ReactAgent:
             self.llm = ChatGoogleGenerativeAI(temperature=0,model="gemini-pro",google_api_key=GOOGLE_API_KEY)
             self.max_token_length = 30000
 
+        else:
+            # Generic OpenAI-compatible fallback for any other model name
+            # (e.g. gpt-4.1-mini, gpt-5.1-mini, gpt-5, or any future model)
+            self.max_token_length = 30000
+            extra_kwargs = {"stop": ['\n']}
+            if no_think:
+                extra_kwargs["extra_body"] = {"chat_template_kwargs": {"enable_thinking": False}}
+            self.llm = ChatOpenAI(temperature=0,
+                     max_tokens=1024,
+                     model_name=react_llm_name,
+                     openai_api_key=OPENAI_API_KEY,
+                     openai_api_base=base_url,
+                     model_kwargs=extra_kwargs)
 
         self.illegal_early_stop_patience = illegal_early_stop_patience
 
@@ -463,12 +481,10 @@ class ReactAgent:
     def prompt_agent(self) -> str:
         while True:
             try:
-                # print(self._build_agent_prompt())
                 if self.react_name == 'gemini':
-                    request = format_step(self.llm.invoke(self._build_agent_prompt(),stop=['\n']).content)
+                    request = format_step(self.llm.invoke(self._build_agent_prompt(), stop=['\n']).content)
                 else:
-                    request = format_step(self.llm([HumanMessage(content=self._build_agent_prompt())]).content)
-                # print(request)
+                    request = format_step(self.llm.invoke([HumanMessage(content=self._build_agent_prompt())]).content)
                 return request
             except:
                 catch_openai_api_error()
@@ -547,7 +563,11 @@ def parse_action(string):
         return None, None
 
 def format_step(step: str) -> str:
-    return step.strip('\n').strip().replace('\n', '')
+    step = step.strip('\n').strip().replace('\n', '')
+    # Chat models echo the label prefix (e.g. "Action 1: ") — strip it so
+    # parse_action() receives a bare "ToolName[args]" string.
+    step = re.sub(r'^((Thought|Action|Observation)\s*\d+:\s*)+', '', step)
+    return step
 
 
 
@@ -646,20 +666,48 @@ def to_string(data) -> str:
         return str(None)
 
 if __name__ == '__main__':
+    from planner_r1_agent import PlannerR1Agent
 
     tools_list = ["notebook","flights","attractions","accommodations","restaurants","googleDistanceMatrix","planner","cities"]
+    # planner_r1 keeps full chat history as ToolMessages, so notebook is redundant
+    planner_r1_tools_list = ["flights","attractions","accommodations","restaurants","googleDistanceMatrix","cities"]
     # model_name = ['gpt-3.5-turbo-1106','gpt-4-1106-preview','gemini','mistral-7B-32K','mixtral','ChatGLM3-6B-32K'][2]
     parser = argparse.ArgumentParser()
     parser.add_argument("--set_type", type=str, default="validation")
     parser.add_argument("--model_name", type=str, default="gpt-3.5-turbo-1106")
     parser.add_argument("--output_dir", type=str, default="./")
+    parser.add_argument("--prompt_style", type=str, default="react",
+                        choices=["react", "planner_r1", "planner_r1_json"],
+                        help="Prompting style: 'react' (original ReAct scratchpad), "
+                             "'planner_r1' (Planner-R1 chat loop, natural language output, compatible with existing eval pipeline), "
+                             "'planner_r1_json' (Planner-R1 chat loop + <answer> JSON output, requires postprocess/convert_planner_r1.py)")
+    parser.add_argument("--start", type=int, default=1, help="First query number (1-indexed, inclusive)")
+    parser.add_argument("--end", type=int, default=None, help="Last query number (1-indexed, inclusive). Defaults to end of dataset.")
+    parser.add_argument("--base_url", type=str, default=None, help="Override OpenAI API base URL (e.g. https://my-gateway/v1). Falls back to OPENAI_API_BASE env var.")
+    parser.add_argument("--max_tokens", type=int, default=None, help="Max tokens per LLM response. Defaults to model/server limit. Set explicitly for OpenAI API (e.g. 4096).")
+    parser.add_argument("--no_think", action="store_true", help="Disable chain-of-thought reasoning for models that support it (e.g. Qwen3 via vLLM).")
+    parser.add_argument("--reasoning_effort", type=str, default=None, help="OpenAI reasoning_effort param ('minimal','low','medium','high').")
     args = parser.parse_args()
     if args.set_type == 'validation':
         query_data_list  = load_dataset('osunlp/TravelPlanner','validation')['validation']
     elif args.set_type == 'test':
         query_data_list  = load_dataset('osunlp/TravelPlanner','test')['test']
-    numbers = [i for i in range(1,len(query_data_list)+1)]
-    agent = ReactAgent(None, tools=tools_list,max_steps=30,react_llm_name=args.model_name,planner_llm_name=args.model_name)
+    end = args.end if args.end is not None else len(query_data_list)
+    numbers = [i for i in range(args.start, end + 1)]
+
+    base_url = args.base_url or os.environ.get('OPENAI_API_BASE')
+
+    if args.prompt_style == 'react':
+        agent = ReactAgent(None, tools=tools_list, max_steps=30,
+                           react_llm_name=args.model_name, planner_llm_name=args.model_name,
+                           base_url=base_url, no_think=args.no_think)
+    else:
+        agent = PlannerR1Agent(prompt_style=args.prompt_style, tools=planner_r1_tools_list, max_steps=30,
+                               react_llm_name=args.model_name, planner_llm_name=args.model_name,
+                               base_url=base_url, no_think=args.no_think,
+                               max_tokens=args.max_tokens,
+                               reasoning_effort=args.reasoning_effort)
+
     with get_openai_callback() as cb:
         
         for number in tqdm(numbers[:]):
@@ -674,13 +722,14 @@ if __name__ == '__main__':
                 
             while True:
                 planner_results, scratchpad, action_log  = agent.run(query)
-                if planner_results != None:
+                if planner_results is not None:
                     break
             
             if planner_results == 'Max Token Length Exceeded.':
-                result[-1][f'{args.model_name}_two-stage_results_logs'] = scratchpad 
+                result[-1][f'{args.model_name}_two-stage_results_logs'] = scratchpad
                 result[-1][f'{args.model_name}_two-stage_results'] = 'Max Token Length Exceeded.'
-                action_log[-1]['state'] = 'Max Token Length of Planner Exceeded.'
+                if action_log:
+                    action_log[-1]['state'] = 'Max Token Length of Planner Exceeded.'
                 result[-1][f'{args.model_name}_two-stage_action_logs'] = action_log
             else:
                 result[-1][f'{args.model_name}_two-stage_results_logs'] = scratchpad 

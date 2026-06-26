@@ -50,21 +50,24 @@ def paper_term_mapping(commonsense_constraint_record, hard_constraint_record):
     return remap_commonsense_constraint_record, remap_hard_constraint_record
 
 
-def eval_score(set_type: str, file_path: str):
+def eval_score(set_type: str, file_path: str, start: int = 1, end: int = None):
 
     if set_type == 'train':
         query_data_list  = load_dataset('osunlp/TravelPlanner','train',download_mode="force_redownload")['train']
     elif set_type == 'validation':
         query_data_list  = load_dataset('osunlp/TravelPlanner','validation',download_mode="force_redownload")['validation']
 
-    
+
     query_data_list = [x for x in query_data_list]
-    hardConstraint_statistic= {level:{day:[] for day in [3,5,7]} for level in ['easy','medium','hard']} 
-    commonsenseConstraint_statistic = {level:{day:[] for day in [3,5,7]} for level in ['easy','medium','hard']} 
+    _end = end if end is not None else len(query_data_list)
+    idx_range = range(start - 1, _end)  # convert 1-indexed to 0-indexed
+
+    hardConstraint_statistic= {level:{day:[] for day in [3,5,7]} for level in ['easy','medium','hard']}
+    commonsenseConstraint_statistic = {level:{day:[] for day in [3,5,7]} for level in ['easy','medium','hard']}
     tested_plans = load_line_json_data(file_path)
     delivery_cnt = 0
     plan_constraint_store = []
-    for idx in tqdm(range(0,len(query_data_list))):
+    for idx in tqdm(idx_range):
         query_data = query_data_list[idx]
         tested_plan = tested_plans[idx]
         if type(query_data) == str:
@@ -95,7 +98,7 @@ def eval_score(set_type: str, file_path: str):
     mapping_constraint_record = {key: {day: {'valid_room_rule':0, 'valid_cuisine':0, 'valid_room_type':0, 'valid_transportation':0} for day in [3,5,7]} for key in ['medium','hard']}
     count_record = {key:{day:0 for day in [3,5,7]} for key in ['easy','medium','hard']}
 
-    for unit in query_data_list:
+    for unit in [query_data_list[i] for i in idx_range]:
         count_record[unit['level']][unit['days']] += 1
         for key in constraint_record['medium'][3]:
             if unit['local_constraint'][key] != None:
@@ -152,7 +155,8 @@ def eval_score(set_type: str, file_path: str):
     final_commonsense_cnt = 0
     final_hardConstraint_cnt = 0
     final_all_cnt_map = {level:0 for level in ['easy','medium','hard']}
-    for idx in (range(0,len(query_data_list))):
+    subset_size = len(idx_range)
+    for idx in range(subset_size):
         if plan_constraint_store[idx]['commonsense_constraint']:
             final_commonsense_pass = True
             final_hardConstraint_pass = True
@@ -179,29 +183,15 @@ def eval_score(set_type: str, file_path: str):
 
     remap_commonsense_constraint_record, remap_hard_constraint_record = paper_term_mapping(commonsenseConstraint_statistic_processed, hardConstraint_statistic_processed)
 
-    if set_type == 'train':
-        result['Delivery Rate'] = delivery_cnt / 45
-        result['Commonsense Constraint Micro Pass Rate'] = constraint_dis_record['commonsense']['pass'] / 360
-        result['Commonsense Constraint Macro Pass Rate'] = final_commonsense_cnt / 45
-        result['Hard Constraint Micro Pass Rate'] = constraint_dis_record['hard']['pass'] / 105
-        result['Hard Constraint Macro Pass Rate'] = final_hardConstraint_cnt / 45
-        result['Final Pass Rate'] = final_all_cnt / 45
+    commonsense_keys_per_plan = 8
+    hard_keys_per_plan = 1  # only valid_cost applies to all plans
 
-    elif set_type == 'validation':
-        result['Delivery Rate'] = delivery_cnt / 180
-        result['Commonsense Constraint Micro Pass Rate'] = constraint_dis_record['commonsense']['pass'] / 1440
-        result['Commonsense Constraint Macro Pass Rate'] = final_commonsense_cnt / 180
-        result['Hard Constraint Micro Pass Rate'] = constraint_dis_record['hard']['pass'] / 420
-        result['Hard Constraint Macro Pass Rate'] = final_hardConstraint_cnt / 180
-        result['Final Pass Rate'] = final_all_cnt / 180
-
-    elif set_type == 'test':
-        result['Delivery Rate'] = delivery_cnt / 1000
-        result['Commonsense Constraint Micro Pass Rate'] = constraint_dis_record['commonsense']['pass'] / 8000
-        result['Commonsense Constraint Macro Pass Rate'] = final_commonsense_cnt / 1000
-        result['Hard Constraint Micro Pass Rate'] = constraint_dis_record['hard']['pass'] / 2290
-        result['Hard Constraint Macro Pass Rate'] = final_hardConstraint_cnt / 1000
-        result['Final Pass Rate'] = final_all_cnt / 1000
+    result['Delivery Rate'] = delivery_cnt / subset_size
+    result['Commonsense Constraint Micro Pass Rate'] = constraint_dis_record['commonsense']['pass'] / (subset_size * commonsense_keys_per_plan)
+    result['Commonsense Constraint Macro Pass Rate'] = final_commonsense_cnt / subset_size
+    result['Hard Constraint Micro Pass Rate'] = constraint_dis_record['hard']['pass'] / max(constraint_dis_record['hard']['total'], 1)
+    result['Hard Constraint Macro Pass Rate'] = final_hardConstraint_cnt / subset_size
+    result['Final Pass Rate'] = final_all_cnt / subset_size
     
 
     return result, {"Commonsense Constraint":remap_commonsense_constraint_record, "Hard Constraint":remap_hard_constraint_record}
@@ -211,9 +201,12 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("--set_type", type=str, default="validation")
     parser.add_argument("--evaluation_file_path", type=str, default="./")
+    parser.add_argument("--start", type=int, default=1, help="First query (1-indexed, inclusive)")
+    parser.add_argument("--end", type=int, default=None, help="Last query (1-indexed, inclusive)")
     args = parser.parse_args()
 
-    scores, detailed_scores = eval_score(args.set_type, file_path=args.evaluation_file_path)
+    scores, detailed_scores = eval_score(args.set_type, file_path=args.evaluation_file_path,
+                                         start=args.start, end=args.end)
 
     for key in scores:
         print(f"{key}: {scores[key]*100}%")

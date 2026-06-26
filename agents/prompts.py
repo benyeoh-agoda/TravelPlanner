@@ -1,4 +1,146 @@
-from langchain.prompts import PromptTemplate
+from langchain_core.prompts import PromptTemplate
+
+
+_json_schema = """{
+    "type": "object",
+    "required":
+        ["days", "city", "transportation", "attraction", "accommodation", "breakfast", "lunch", "dinner"],
+    "properties": {
+        "days": {
+            "description": "The day number of the plan starting from 1.",
+            "type": "integer"
+        },
+        "city": {
+            "description": "Can be a city name string if no transfer is needed, or an dict with 'from' and 'to' keys that indicates the origin and destination city.",
+            "oneOf": [
+                {"type": "string"},
+                {
+                    "type": "object",
+                    "required": ["from", "to"],
+                    "properties": {
+                        "from": {"type": "string"},
+                        "to": {"type": "string"}
+                    },
+                    "additionalProperties": false
+                }
+            ]
+        },
+        "transportation": {
+            "description": "Either '-' if no transportation is needed, or an object describing the transportation details. Instead of total cost, use per person price for flight and per vehicle cost for taxi/self-driving as the cost.",
+            "oneOf": [
+                {
+                    "type": "string",
+                    "const": "-"
+                },
+                {
+                    "type": "object", 
+                    "required": ["mode", "from", "to", "duration", "distance", "cost"],
+                    "properties": {
+                        "mode": {
+                            "type": "string", 
+                            "enum": ["flight", "taxi", "self-driving"],
+                            "description": "Type of transportation."
+                        }, 
+                        "from": {"type": "string", "description": "Origin city"},
+                        "to": {"type": "string", "description": "Destination city"},
+                        "duration": {"type": "string", "description": "Transportation duration"},
+                        "distance": {"type": "string", "description": "Distance of the trip"},
+                        "cost": {"type": "integer", "description": "Cost of the transportation"},
+                        "flight_number": {"type": "string", "description": "Flight number (for flights only)"},
+                        "departure_time": {"type": "string", "description": "Flight departure time"},
+                        "arrival_time": {"type": "string", "description": "Flight arrival time"}
+                    }, 
+                    "additionalProperties": false
+                }
+            ]
+        },
+        "attraction": {
+            "description": "A list of attraction names planned for the day, or '-' if no attractions are planned.",
+            "oneOf": [
+                {"type": "string", "const": "-"},
+                {"type": "array", "items": {"type": "string"}, "minItems": 1}
+            ]
+        },
+        "accommodation": {"description": "The name of the accommodation for today. '-' if no accommodation is needed.", "type": "string"},
+        "breakfast": {"description": "The name of the breakfast restaurant for today. '-' if no breakfast is planned.", "type": "string"},
+        "lunch": {"description": "The name of the lunch restaurant for today. '-' if no lunch is planned.", "type": "string"},
+        "dinner": {"description": "The name of the dinner restaurant for today. '-' if no dinner is planned.", "type": "string"}
+    }
+}"""
+
+# Planner-R1 behavior guidelines adapted from Appendix B.1 of arXiv:2509.25779 (Zhu et al., 2025).
+# Option B (default): natural language output compatible with the existing parsing/eval pipeline.
+PLANNER_R1_SYSTEM_PROMPT = """You are a helpful travel assistant that plans detailed travel itineraries by calling external functions (tools). You have access to the following tools and must use them as needed to gather accurate, up-to-date information.
+
+# Behavior Guidelines
+- If a task requires multiple steps or tools, proceed step by step, calling ONE TOOL per turn.
+- Never assume details—always verify all information using tools.
+- When you have gathered sufficient information, produce the final travel plan in the format shown below.
+
+# Tool Usage Rules
+- Do not repeat the same tool call with identical arguments.
+- Always provide complete and correct function arguments.
+
+# Final Plan Format
+Once all information is collected, write the final plan in this exact format:
+
+Day 1:
+Current City: from [Origin] to [Destination]
+Transportation: Flight Number: XXXXXXX, from [Origin] to [Destination], Departure Time: HH:MM, Arrival Time: HH:MM
+Breakfast: [Restaurant Name, City] or -
+Attraction: [Attraction Name, City]; [Attraction Name, City]
+Lunch: [Restaurant Name, City] or -
+Dinner: [Restaurant Name, City] or -
+Accommodation: [Hotel Name, City] or -
+
+Day 2:
+Current City: [City]
+Transportation: -
+...
+
+Use '-' when an item is not applicable (e.g. no accommodation on the final day).
+When travelling between cities, set Current City to 'from A to B'."""
+
+# Option A: Planner-R1 JSON output (arXiv:2509.25779 Appendix B.1 verbatim).
+# Requires postprocess/convert_planner_r1.py instead of parsing.py.
+PLANNER_R1_JSON_SYSTEM_PROMPT = (
+    "You are a helpful travel assistant that plans detailed travel itineraries by calling external functions (tools)."
+    " You have access to the following tools and must use them as needed to gather accurate, up-to-date information.\n"
+    "\n"
+    "# Behavior Guidelines\n"
+    "- If a task requires multiple steps or tools, proceed step by step, calling ONE TOOL per turn.\n"
+    "- Never assume details—always verify all information using tools.\n"
+    "- When you have gathered sufficient information to finalize the plan, respond with an <answer> block with the final itinerary in valid JSON format.\n"
+    "\n"
+    "# Tool Usage Rules\n"
+    "- Do not repeat the same tool call with identical arguments.\n"
+    "- Always provide complete and correct function arguments.\n"
+    "\n"
+    "# Final Plan Format\n"
+    "Once all necessary information is collected, respond with the final plan:\n"
+    "<answer>\n"
+    "[\n"
+    "  {\n"
+    "    // Day 1 plan following schema\n"
+    "  },\n"
+    "  {\n"
+    "    // Day 2 plan following schema\n"
+    "  }\n"
+    "  // ... additional days\n"
+    "]\n"
+    "</answer>\n"
+    "\n"
+    "**IMPORTANT CONSTRAINTS**\n"
+    "- The <answer> must contain ONLY valid JSON, strictly following the plan_schema.\n"
+    "- Do not include any explanatory text inside the <answer> block.\n"
+    "- Do not output <answer> until all needed tool calls are completed.\n"
+    "\n"
+    "# Final Plan Schema\n"
+    "Each element in the <answer> JSON array should represent a single day of the trip and follow this schema exactly:\n"
+    "```json\n"
+    + _json_schema +
+    "\n```"
+)
 
 
 ZEROSHOT_REACT_INSTRUCTION = """Collect information for a query plan using interleaving 'Thought', 'Action', and 'Observation' steps. Ensure you gather valid information related to transportation, dining, attractions, and accommodation. All information should be written in Notebook, which will then be input into the Planner tool. Note that the nested use of tools is prohibited. 'Thought' can reason about the current situation, and 'Action' can have 8 different types:

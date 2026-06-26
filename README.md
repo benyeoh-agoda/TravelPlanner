@@ -57,19 +57,21 @@ pip install -r requirements.txt
 In the two-stage mode, language agents are tasked with employing various search tools to gather information.
 Based on the collected information, language agents are expected to deliver a plan that not only meets the user’s needs specified in the query but also adheres to commonsense constraints.
 
+Two agent implementations are supported via `--prompt_style`:
+
+- **`react`** (default): ReAct-style scratchpad agent; terminates by calling the `Planner` tool.
+- **`planner_r1`**: Chat-loop agent (arXiv:2509.25779); uses native OpenAI tool-calling (`bind_tools`) instead of a text-formatted tool catalog; emits the final plan directly as free-form `Day N:` text.
+
 ```bash
-export OUTPUT_DIR=path/to/your/output/file
-# We support MODEL in ['gpt-3.5-turbo-X','gpt-4-1106-preview','gemini','mistral-7B-32K','mixtral']
-export MODEL_NAME=MODEL_NAME
-export OPENAI_API_KEY=YOUR_OPENAI_KEY
-# if you do not want to test google models, like gemini, just input "1".
-export GOOGLE_API_KEY=YOUR_GOOGLE_KEY
-# SET_TYPE in ['validation', 'test']
-export SET_TYPE=validation
+# prompt_style: react (default) or planner_r1
+# set_type: validation or test
 cd agents
-python tool_agents.py  --set_type $SET_TYPE --output_dir $OUTPUT_DIR --model_name $MODEL_NAME
+python tool_agents.py --set_type validation --output_dir ./output --model_name gpt-4.1-mini --prompt_style react
+
+# To run a subset of queries (1-indexed, inclusive):
+python tool_agents.py --set_type validation --output_dir ./output --model_name gpt-4.1-mini --prompt_style react --start 1 --end 10
 ```
-The generated plan will be stored in OUTPUT_DIR/SET_TYPE.
+The generated plan will be stored in `output/validation/`.
 
 ### Sole-Planning Mode
 
@@ -79,44 +81,28 @@ The sole-planning mode ensures that no crucial information is missed, thereby en
 Please refer to the paper for more details.
 
 ```bash
-export OUTPUT_DIR=path/to/your/output/file
-# We support MODEL in ['gpt-3.5-turbo-X','gpt-4-1106-preview','gemini','mistral-7B-32K','mixtral']
-export MODEL_NAME=MODEL_NAME
-export OPENAI_API_KEY=YOUR_OPENAI_KEY
-# if you do not want to test google models, like gemini, just input "1".
-export GOOGLE_API_KEY=YOUR_GOOGLE_KEY
-# SET_TYPE in ['validation', 'test']
-export SET_TYPE=validation
-# STRATEGY in ['direct','cot','react','reflexion']
-export STRATEGY=direct
-
+# strategy: direct, cot, react, or reflexion
 cd tools/planner
-python sole_planning.py  --set_type $SET_TYPE --output_dir $OUTPUT_DIR --model_name $MODEL_NAME --strategy $STRATEGY
+python sole_planning.py --set_type validation --output_dir ./output --model_name gpt-4.1-mini --strategy direct
 ```
 
 ## Postprocess
 
-In order to parse natural language plans, we use gpt-4 to convert these plans into json formats. We encourage developers to try different parsing prompts to obtain better-formatted plans.
+In order to parse natural language plans, we use a chat model to convert these plans into JSON format. We encourage developers to try different parsing prompts to obtain better-formatted plans.
+
+All three postprocess scripts support `--start` / `--end` flags (1-indexed, inclusive) to process a subset of queries. `combination.py` always writes all 180 entries to the submission file (missing queries get a `null` plan) so that `eval.py` can process the full validation set.
 
 ```bash
-export OUTPUT_DIR=path/to/your/output/file
-export MODEL_NAME=MODEL_NAME
-export OPENAI_API_KEY=YOUR_OPENAI_KEY
-export SET_TYPE=validation
-export STRATEGY=direct
-# MODE in ['two-stage','sole-planning']
-export MODE=two-stage
-export TMP_DIR=path/to/tmp/parsed/plan/file
-export SUBMISSION_DIR=path/to/your/evaluation/file
-
 cd postprocess
-python parsing.py  --set_type $SET_TYPE --output_dir $OUTPUT_DIR --model_name $MODEL_NAME --strategy $STRATEGY --mode $MODE --tmp_dir $TMP_DIR
 
-# Then these parsed plans should be stored as the real json formats.
-python element_extraction.py  --set_type $SET_TYPE --output_dir $OUTPUT_DIR --model_name $MODEL_NAME --strategy $STRATEGY --mode $MODE --tmp_dir $TMP_DIR
+# Step 1: convert natural-language plans to JSON (supports fenced or raw JSON output)
+python parsing.py --set_type validation --output_dir ./output --tmp_dir ./output --model_name gpt-4.1-mini --mode two-stage --parsing_model gpt-4.1-mini
 
-# Finally, combine these plan files for evaluation. We also provide a evaluation example file "example_evaluation.jsonl" in the postprocess folder.
-python combination.py --set_type $SET_TYPE --output_dir $OUTPUT_DIR --model_name $MODEL_NAME --strategy $STRATEGY --mode $MODE  --submission_file_dir $SUBMISSION_DIR
+# Step 2: extract structured fields back into the generated_plan JSON files
+python element_extraction.py --set_type validation --output_dir ./output --tmp_dir ./output --model_name gpt-4.1-mini --mode two-stage
+
+# Step 3: combine plan files into a single submission JSONL for evaluation
+python combination.py --set_type validation --output_dir ./output --submission_file_dir ./output --model_name gpt-4.1-mini --mode two-stage
 ```
 
 ## Evaluation
@@ -124,12 +110,35 @@ python combination.py --set_type $SET_TYPE --output_dir $OUTPUT_DIR --model_name
 We support the offline validation set evaluation using the provided evaluation script. To avoid data contamination, please use our official [leaderboard](https://huggingface.co/spaces/osunlp/TravelPlannerLeaderboard) for test set evaluation.
 
 ```bash
-export SET_TYPE=validation
-export EVALUATION_FILE_PATH=your/evaluation/file/path
-
 cd evaluation
-python eval.py --set_type $SET_TYPE --evaluation_file_path $EVALUATION_FILE_PATH
+python eval.py --set_type validation --evaluation_file_path ./output/validation_gpt-4.1-mini_two-stage_submission.jsonl
 ```
+
+## End-to-End Example
+
+Full pipeline for a single query (query 1, validation set) using `gpt-4.1-mini`:
+
+```bash
+# Step 1: run the agent (--start/--end for a subset; omit to run all 180)
+cd agents
+python tool_agents.py --set_type validation --output_dir ./output --model_name gpt-4.1-mini --prompt_style react --start 1 --end 1
+
+# Step 2: parse the natural-language plan into JSON
+cd ../postprocess
+python parsing.py --set_type validation --output_dir ./output --tmp_dir ./output --model_name gpt-4.1-mini --mode two-stage --parsing_model gpt-4.1-mini --start 1 --end 1
+
+# Step 3: extract structured fields
+python element_extraction.py --set_type validation --output_dir ./output --tmp_dir ./output --model_name gpt-4.1-mini --mode two-stage --start 1 --end 1
+
+# Step 4: build submission file (all 180 entries; unrun queries get null plan)
+python combination.py --set_type validation --output_dir ./output --submission_file_dir ./output --model_name gpt-4.1-mini --mode two-stage
+
+# Step 5: evaluate
+cd ../evaluation
+python eval.py --set_type validation --evaluation_file_path ./output/validation_gpt-4.1-mini_two-stage_submission.jsonl
+```
+
+Replace `--prompt_style react` with `--prompt_style planner_r1` to run the Planner-R1 chat-loop agent instead. All downstream postprocess and eval steps are identical for both modes.
 
 ## ⚠️Warnings
 

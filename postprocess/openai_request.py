@@ -21,6 +21,14 @@ KEY_POOL =  [
 if not KEY_POOL[0]:
     raise ValueError("OPENAI_API_KEY is required. Please set it in your .env file.")
 openai.api_key = KEY_POOL[0]
+_openai_client = openai.OpenAI(
+    api_key=KEY_POOL[0],
+    base_url=os.environ.get('OPENAI_API_BASE', 'https://api.openai.com/v1'),
+)
+
+def set_base_url(base_url: str):
+    global _openai_client
+    _openai_client = openai.OpenAI(api_key=KEY_POOL[KEY_INDEX], base_url=base_url)
 
 
 class TimeoutError(Exception):
@@ -125,27 +133,23 @@ def keep_logprobs_before_eos(tokens, logprobs):
 
 
 def catch_openai_api_error(prompt_input: list):
-    global KEY_INDEX
+    global KEY_INDEX, _openai_client
     error = sys.exc_info()[0]
-    if error == openai.error.InvalidRequestError:
-        # something is wrong: e.g. prompt too long
-        print(f"InvalidRequestError\nPrompt:\n\n{prompt_input}\n\n")
+    if error == openai.BadRequestError:
+        print(f"BadRequestError\nPrompt:\n\n{prompt_input}\n\n")
         assert False
-    elif error == openai.error.RateLimitError:
+    elif error == openai.RateLimitError:
         KEY_INDEX = (KEY_INDEX + 1) % len(KEY_POOL)
-        openai.api_key = KEY_POOL[KEY_INDEX]
-        print("RateLimitError, now change the key. Current key is ", openai.api_key)
-    elif error == openai.error.APIError:
-        KEY_INDEX = (KEY_INDEX + 1) % len(KEY_POOL)
-        openai.api_key = KEY_POOL[KEY_INDEX]
-        print("APIError, now change the key. Current key is ", openai.api_key)
-    elif error == openai.error.AuthenticationError:
-        KEY_INDEX = (KEY_INDEX + 1) % len(KEY_POOL)
-        openai.api_key = KEY_POOL[KEY_INDEX]
-        print("AuthenticationError, now change the key. Current key is ", openai.api_key)
+        _openai_client = openai.OpenAI(
+            api_key=KEY_POOL[KEY_INDEX],
+            base_url=os.environ.get('OPENAI_API_BASE', 'https://api.openai.com/v1'),
+        )
+        print("RateLimitError, now change the key.")
+    elif error == openai.APIError:
+        print("APIError, retrying...")
+    elif error == openai.AuthenticationError:
+        print("AuthenticationError")
     elif error == TimeoutError:
-        KEY_INDEX = (KEY_INDEX + 1) % len(KEY_POOL)
-        openai.api_key = KEY_POOL[KEY_INDEX]
         print("TimeoutError, retrying...")
     else:
         print("API error:", error)
@@ -190,21 +194,20 @@ def prompt_chatgpt(system_input, user_input, temperature,save_path,index,history
     history.append({"role": "user", "content": user_input})
     while True:
         try:
-            completion = limited_execution_time(openai.ChatCompletion.create,
+            completion = _openai_client.chat.completions.create(
                 model=model_name,
-                prompt=history,
-                temp=temperature)
-            if completion is None:
-                raise TimeoutError
+                messages=history,
+                temperature=temperature,
+            )
             break
         except:
             catch_openai_api_error(user_input)
             time.sleep(1)
 
-    assistant_output = completion['choices'][0]['message']['content']
+    assistant_output = completion.choices[0].message.content
     history.append({"role": "assistant", "content": assistant_output})
-    total_prompt_tokens = completion['usage']['prompt_tokens']
-    total_completion_tokens = completion['usage']['completion_tokens']
+    total_prompt_tokens = completion.usage.prompt_tokens
+    total_completion_tokens = completion.usage.completion_tokens
     with open(save_path,'a+',encoding='utf-8') as f:
         assistant_output = str(index)+"\t"+"\t".join(x for x in assistant_output.split("\n"))
         f.write(assistant_output+'\n')
@@ -237,7 +240,7 @@ JSON\n"""
         prompt_list.append(prompt)
     return prompt_list
 
-def build_plan_format_conversion_prompt(directory, set_type='validation',model_name='gpt4',strategy='direct',mode='two-stage'):
+def build_plan_format_conversion_prompt(directory, set_type='validation',model_name='gpt4',strategy='direct',mode='two-stage',start=1,end=None):
     prompt_list = []
     prefix = """Please assist me in extracting valid information from a given natural language text and reconstructing it in JSON format, as demonstrated in the following example. If transportation details indicate a journey from one city to another (e.g., from A to B), the 'current_city' should be updated to the destination city (in this case, B). Use a ';' to separate different attractions, with each attraction formatted as 'Name, City'. If there's information about transportation, ensure that the 'current_city' aligns with the destination mentioned in the transportation details (i.e., the current city should follow the format 'from A to B'). Also, ensure that all flight numbers and costs are followed by a colon (i.e., 'Flight Number:' and 'Cost:'), consistent with the provided example. Each item should include ['day', 'current_city', 'transportation', 'breakfast', 'attraction', 'lunch', 'dinner', 'accommodation']. Replace non-specific information like 'eat at home/on the road' with '-'. Additionally, delete any '$' symbols.
 -----EXAMPLE-----
@@ -280,7 +283,8 @@ def build_plan_format_conversion_prompt(directory, set_type='validation',model_n
     elif set_type == 'test':
         query_data_list  = load_dataset('osunlp/TravelPlanner','test')['test']
 
-    idx_number_list = [i for i in range(1,len(query_data_list)+1)]
+    _end = end if end is not None else len(query_data_list)
+    idx_number_list = [i for i in range(start, _end + 1)]
     if mode == 'two-stage':
         suffix = ''
     elif mode == 'sole-planning':
