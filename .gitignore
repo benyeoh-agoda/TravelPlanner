@@ -8,3 +8,11 @@
 output*
 tmp
 t
+
+# Database files (too large for GitHub — download separately via Google Drive)
+database/flights/
+database/accommodations/
+database/attractions/
+database/restaurants/
+database/googleDistanceMatrix/
+database/background/
