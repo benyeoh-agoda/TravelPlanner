@@ -4,7 +4,7 @@ from commonsense_constraint import evaluation as commonsense_eval
 from hard_constraint import evaluation as hard_eval
 import json
 from tqdm import tqdm
-from datasets import load_dataset
+from utils.dataset import load_query_data
 import argparse
 
 
@@ -52,10 +52,7 @@ def paper_term_mapping(commonsense_constraint_record, hard_constraint_record):
 
 def eval_score(set_type: str, file_path: str, start: int = 1, end: int = None):
 
-    if set_type == 'train':
-        query_data_list  = load_dataset('osunlp/TravelPlanner','train',download_mode="force_redownload")['train']
-    elif set_type == 'validation':
-        query_data_list  = load_dataset('osunlp/TravelPlanner','validation',download_mode="force_redownload")['validation']
+    query_data_list = load_query_data(set_type)
 
 
     query_data_list = [x for x in query_data_list]

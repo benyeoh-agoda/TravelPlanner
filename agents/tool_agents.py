@@ -21,6 +21,7 @@ from langchain_core.messages import (
 )
 from prompts import zeroshot_react_agent_prompt
 from utils.func import load_line_json_data, save_file
+from utils.dataset import load_query_data
 import sys
 import json
 import openai
@@ -688,10 +689,7 @@ if __name__ == '__main__':
     parser.add_argument("--no_think", action="store_true", help="Disable chain-of-thought reasoning for models that support it (e.g. Qwen3 via vLLM).")
     parser.add_argument("--reasoning_effort", type=str, default=None, help="OpenAI reasoning_effort param ('minimal','low','medium','high').")
     args = parser.parse_args()
-    if args.set_type == 'validation':
-        query_data_list  = load_dataset('osunlp/TravelPlanner','validation')['validation']
-    elif args.set_type == 'test':
-        query_data_list  = load_dataset('osunlp/TravelPlanner','test')['test']
+    query_data_list = load_query_data(args.set_type)
     end = args.end if args.end is not None else len(query_data_list)
     numbers = [i for i in range(args.start, end + 1)]
 

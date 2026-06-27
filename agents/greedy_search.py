@@ -13,7 +13,7 @@ from tqdm import tqdm
 import re
 import random
 import argparse
-from datasets import load_dataset
+from utils.dataset import load_query_data
 
 
 flight = Flights()
@@ -113,10 +113,7 @@ if __name__ == '__main__':
     parser.add_argument("--set_type", type=str, default="validation")
     parser.add_argument("--output_dir", type=str, default="./")
     args = parser.parse_args()
-    if args.set_type == 'validation':
-        query_data_list  = load_dataset('osunlp/TravelPlanner','validation')['validation']
-    elif args.set_type == 'test':
-        query_data_list  = load_dataset('osunlp/TravelPlanner','test')['test']
+    query_data_list = load_query_data(args.set_type)
     for idx, query in enumerate(tqdm(query_data_list)):
         plan_list = [{'finished':[False,set()]}]
         restaurant_list = []

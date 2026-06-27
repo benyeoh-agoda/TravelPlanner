@@ -1,16 +1,17 @@
 import os
+import sys
 from dotenv import load_dotenv
 load_dotenv()
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # repo root
 import openai
 import math
-import sys
 import time
 from tqdm import tqdm
 from typing import Iterable, List, TypeVar
 import func_timeout
 from func_timeout import func_set_timeout
 import json
-from datasets import load_dataset
+from utils.dataset import load_query_data
 
 
 T = TypeVar('T')
@@ -276,12 +277,7 @@ def build_plan_format_conversion_prompt(directory, set_type='validation',model_n
     }}]
 -----EXAMPLE END-----
 """
-    if set_type == 'train':
-        query_data_list  = load_dataset('osunlp/TravelPlanner','train')['train']
-    elif set_type == 'validation':
-        query_data_list  = load_dataset('osunlp/TravelPlanner','validation')['validation']
-    elif set_type == 'test':
-        query_data_list  = load_dataset('osunlp/TravelPlanner','test')['test']
+    query_data_list = load_query_data(set_type)
 
     _end = end if end is not None else len(query_data_list)
     idx_number_list = [i for i in range(start, _end + 1)]

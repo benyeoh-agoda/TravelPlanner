@@ -1,7 +1,10 @@
 from tqdm import tqdm
 import json
 import argparse
-from datasets import load_dataset
+import os
+import sys
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # repo root
+from utils.dataset import load_query_data
 
 
 if __name__ == '__main__':
@@ -23,12 +26,7 @@ if __name__ == '__main__':
     elif args.mode == 'sole-planning':
         suffix = f'_{args.strategy}'
 
-    if args.set_type == 'train':
-        query_data_list  = load_dataset('osunlp/TravelPlanner','train')['train']
-    elif args.set_type == 'validation':
-        query_data_list  = load_dataset('osunlp/TravelPlanner','validation')['validation']
-    elif args.set_type == 'test':
-        query_data_list  = load_dataset('osunlp/TravelPlanner','test')['test']
+    query_data_list = load_query_data(args.set_type)
 
     _end = args.end if args.end is not None else len(query_data_list)
     idx_number_list = [i for i in range(args.start, _end + 1)]

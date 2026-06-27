@@ -17,8 +17,10 @@ import re
 import json
 import argparse
 import os
+import sys
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # repo root
 from tqdm import tqdm
-from datasets import load_dataset
+from utils.dataset import load_query_data
 
 
 def extract_answer_json(text: str):
@@ -126,12 +128,7 @@ if __name__ == '__main__':
                         help="Directory to write the final submission JSONL for eval.py")
     args = parser.parse_args()
 
-    if args.set_type == 'validation':
-        query_data_list = load_dataset('osunlp/TravelPlanner', 'validation')['validation']
-    elif args.set_type == 'test':
-        query_data_list = load_dataset('osunlp/TravelPlanner', 'test')['test']
-    else:
-        raise ValueError(f"Unknown set_type: {args.set_type}")
+    query_data_list = load_query_data(args.set_type)
 
     os.makedirs(args.submission_file_dir, exist_ok=True)
     submission_path = os.path.join(args.submission_file_dir,
